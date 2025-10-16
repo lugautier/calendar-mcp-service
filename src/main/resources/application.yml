@@ -1,0 +1,28 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: calendar-mcp-service
+
+microsoft:
+  graph:
+    tenant-id: ${MS_TENANT_ID:}
+    client-id: ${MS_CLIENT_ID:}
+    client-secret: ${MS_CLIENT_SECRET:}
+    scope: https://graph.microsoft.com/.default
+
+logging:
+  level:
+    com.enterprise.calendar: DEBUG
+    com.microsoft.graph: INFO
+    org.springframework.web: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
