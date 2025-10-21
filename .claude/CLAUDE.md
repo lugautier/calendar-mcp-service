@@ -247,22 +247,6 @@ void shouldRegisterGetEventsTool() {
     assertThat(tools).extracting("name").contains("get_events");
 }
 
-@Test
-void shouldHandleGetEventsWithValidArguments() {
-    // Mock CalendarService
-    when(calendarService.getEvents("2025-10-15", "2025-10-31"))
-        .thenReturn(List.of(new CalendarEvent(...)));
-
-    // Call handler directly
-    Map<String, Object> arguments = Map.of(
-        "start_date", "2025-10-15",
-        "end_date", "2025-10-31"
-    );
-
-    CallToolResult result = toolsProvider.handleGetEvents(arguments);
-
-    assertThat(result.getContent()).isNotEmpty();
-}
 ```
 
 ## Logging Strategy
@@ -292,16 +276,15 @@ When working on this project:
 
 1. **Always check TODO.md** for detailed specifications and current progress at the start of any session
 2. **Use the MCP SDK**: Don't implement custom JSON-RPC parsing or protocol handling
-3. **Focus on business logic**: Tools, CalendarService, GraphAPIService
-4. **Use Java 21 features**: Records for DTOs, pattern matching, switch expressions
-5. **Follow Spring Boot conventions**: Annotations, dependency injection, profiles
-6. **Validate all inputs**: Never trust external data, especially dates
-7. **Mock MS Graph in tests**: Never call real API during test execution
-8. **Use Lombok**: Reduce boilerplate with @Data, @Builder, @Slf4j
-9. **Log with context**: Include tool name, arguments, execution time in logs
-10. **Keep secrets safe**: Never hardcode credentials, use environment variables
-11. **Write concise commits**: Use `/commit-short` or `/commit-tdd` commands
-12. **Explain all Java concepts in French before implementing**: Consider the developer is new to Java/Spring Boot
+3. **Use Java 21 features**: Records for DTOs, pattern matching, switch expressions
+4. **Follow Spring Boot conventions**: Annotations, dependency injection, profiles
+5. **Validate all inputs**: Never trust external data, especially dates
+6. **Mock MS Graph in tests**: Never call real API during test execution
+7. **Use Lombok**: Reduce boilerplate with @Data, @Builder, @Slf4j
+8. **Log with context**: Include tool name, arguments, execution time in logs
+9. **Keep secrets safe**: Never hardcode credentials, use environment variables
+11. **Explain all Java concepts in French before implementing**: Consider the developer is new to Java/Spring Boot
+12. **No comments that are not production-ready**. Only write necessary comments.
 
 ### SDK-Specific Best Practices
 

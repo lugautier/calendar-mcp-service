@@ -69,7 +69,7 @@ Query calendar events by date range with optional filters.
 **Input Schema:**
 ```json
 {
-  "start_date": "2025-10-15",  // ISO8601: yyyy-MM-dd
+  "start_date": "2025-10-15",
   "end_date": "2025-10-31",
   "filter": "optional filter string"
 }
@@ -93,7 +93,7 @@ Analyze calendar and detect free time slots for scheduling.
 **Input Schema:**
 ```json
 {
-  "duration": 60,  // minutes
+  "duration": 60,
   "date_range": {
     "start": "2025-10-15",
     "end": "2025-10-31"
@@ -205,69 +205,124 @@ curl http://localhost:8080/actuator/health
 
 ### 1. McpServer Configuration
 
-The SDK's `McpServer` is configured as a Spring bean:
+The SDK's `McpSyncServer` is configured as a Spring bean with tool capabilities:
 
 ```java
 @Configuration
+@RequiredArgsConstructor
 public class McpServerConfig {
 
+    private final CalendarToolsProvider toolsProvider;
+
     @Bean
-    public McpServer mcpServer(CalendarToolsProvider toolsProvider) {
-        return McpServer.builder()
-            .serverInfo(new ServerInfo("calendar-mcp-service", "1.0.0"))
-            .capabilities(ServerCapabilities.builder()
-                .tools(ToolsCapability.builder().build())
-                .build())
-            .toolsProvider(toolsProvider::getTools)
+    public WebMvcSseServerTransportProvider transportProvider() {
+        return WebMvcSseServerTransportProvider.builder()
+            .messageEndpoint("/mcp")
             .build();
     }
 
     @Bean
-    public McpTransport mcpTransport() {
-        return new SpringWebMvcSseServerTransport();
+    public McpSyncServer mcpServer(WebMvcSseServerTransportProvider transportProvider) {
+        McpSyncServer server = McpServer.sync(transportProvider)
+            .serverInfo("calendar-mcp-service", "1.0.0")
+            .capabilities(McpSchema.ServerCapabilities.builder()
+                .tools(true)  // Enable tool capabilities
+                .build())
+            .build();
+
+        // Register tools with handlers after server creation
+        toolsProvider.registerTools(server);
+
+        return server;
     }
 }
 ```
 
-### 2. Tool Registration
+### 2. Tool Definition & Registration
 
-Tools are registered via `CalendarToolsProvider`:
+Tools are defined with handlers in `CalendarToolsProvider`:
 
 ```java
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class CalendarToolsProvider {
 
     private final CalendarService calendarService;
     private final ObjectMapper objectMapper;
 
-    public List<Tool> getTools() {
+    // Single source of truth: tool definitions with handlers
+    private List<ToolDefinition> getToolDefinitions() {
         return List.of(
-            buildGetEventsTool(),
-            buildBlockDatesTool(),
+            new ToolDefinition(
+                "get_events",
+                "Query calendar events by date range",
+                GetEventsSchema::create,
+                this::handleGetEvents  // Handler method reference
+            ),
+            new ToolDefinition(
+                "block_dates",
+                "Block time slots by creating Out of Office events",
+                BlockDatesSchema::create,
+                null  // To be implemented
+            )
             // ... other tools
         );
     }
 
-    private Tool buildGetEventsTool() {
+    // For tools/list discovery
+    public List<Tool> getTools() {
+        return getToolDefinitions().stream()
+            .map(this::buildTool)
+            .toList();
+    }
+
+    // Register handlers with MCP server
+    public void registerTools(McpSyncServer server) {
+        log.info("Registering MCP tools with handlers");
+
+        getToolDefinitions().forEach(definition -> {
+            if (definition.handler() != null) {
+                var spec = new SyncToolSpecification(
+                    buildTool(definition),     // Tool metadata
+                    definition.handler()        // Handler function
+                );
+                server.addTool(spec);
+                log.debug("Registered tool '{}' with handler", definition.name());
+            }
+        });
+    }
+
+    private Tool buildTool(ToolDefinition definition) {
         return Tool.builder()
-            .name("get_events")
-            .description("Query calendar events by date range")
-            .inputSchema(GetEventsSchema.create())
-            .handler(this::handleGetEvents)
+            .name(definition.name())
+            .description(definition.description())
+            .inputSchema(definition.schemaSupplier().get())
             .build();
     }
 
-    private CallToolResult handleGetEvents(Map<String, Object> arguments) {
+    // Handler signature: McpSyncServerExchange + arguments
+    public CallToolResult handleGetEvents(
+        McpSyncServerExchange exchange,
+        Map<String, Object> arguments
+    ) {
         String startDate = (String) arguments.get("start_date");
         String endDate = (String) arguments.get("end_date");
 
-        List<CalendarEvent> events = calendarService.getEvents(startDate, endDate);
+        var events = calendarService.getEvents(startDate, endDate);
+        String json = objectMapper.writeValueAsString(events);
 
-        return CallToolResult.content(
-            TextContent.of(objectMapper.writeValueAsString(events))
-        );
+        var textContent = new TextContent(json);
+        return new CallToolResult(List.of(textContent), false, null, null);
     }
+
+    // Internal record for DRY tool definitions
+    private record ToolDefinition(
+        String name,
+        String description,
+        Supplier<JsonSchema> schemaSupplier,
+        BiFunction<McpSyncServerExchange, Map<String, Object>, CallToolResult> handler
+    ) {}
 }
 ```
 
@@ -295,7 +350,7 @@ public class GetEventsSchema {
 }
 ```
 
-### 4. SDK Automatic Handling
+### 4. SDK Request Flow
 
 When a client sends:
 
@@ -314,12 +369,15 @@ When a client sends:
 }
 ```
 
-The SDK:
-1. Parses the JSON-RPC request
-2. Finds the `get_events` tool
-3. Calls `handleGetEvents(arguments)`
-4. Wraps the result in JSON-RPC response
-5. Sends via transport
+The SDK automatically:
+1. **Receives** the HTTP request on `/mcp` endpoint
+2. **Parses** the JSON-RPC 2.0 message
+3. **Routes** to the registered tool handler via `SyncToolSpecification`
+4. **Calls** `handleGetEvents(exchange, arguments)`
+5. **Serializes** `CallToolResult` to JSON-RPC response
+6. **Returns** via SSE transport
+
+**Key Point:** The SDK handles all protocol operations. We only implement business logic in handlers.
 
 ---
 
@@ -334,19 +392,6 @@ The SDK:
 
 # Integration tests
 ./mvnw verify
-```
-
-### Test Structure
-
-```
-src/test/java/
-├── mcp/
-│   └── CalendarToolsProviderTest.java  # Tool registration tests
-├── service/
-│   ├── CalendarServiceTest.java        # Business logic tests
-│   └── GraphAPIServiceTest.java        # MS Graph integration tests
-└── integration/
-    └── McpServerIntegrationTest.java   # E2E tests with mcp-test
 ```
 
 ---
